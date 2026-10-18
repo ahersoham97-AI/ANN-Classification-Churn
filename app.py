@@ -3,170 +3,233 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import pickle
-from tensorflow.keras.models import load_model
+from tensorflow import keras
 
 # -----------------------------------
-# 1. Load trained model and encoders
+# 1. Page configuration
 # -----------------------------------
+st.set_page_config(
+    page_title="Bank Churn Prediction",
+    page_icon="🏦",
+    layout="centered"
+)
 
+st.title("🏦 Bank Customer Churn Prediction")
+st.write(
+    "Enter the customer's details to predict whether "
+    "they are likely to leave the bank."
+)
+
+# -----------------------------------
+# 2. Load model and preprocessing files
+# -----------------------------------
 @st.cache_resource
 def load_artifacts():
-    model = load_model("model.h5")
+    model = keras.models.load_model(
+        "model.h5",
+        compile=False
+    )
 
     with open("onehot_encoder_geo.pkl", "rb") as file:
-        onehot_encoder_geo = pickle.load(file)
+        geo_encoder = pickle.load(file)
 
     with open("label_encoder_gender.pkl", "rb") as file:
-        label_encoder_gender = pickle.load(file)
+        gender_encoder = pickle.load(file)
 
     with open("scaler.pkl", "rb") as file:
         scaler = pickle.load(file)
 
-    return model, onehot_encoder_geo, label_encoder_gender, scaler
+    return model, geo_encoder, gender_encoder, scaler
 
 
 try:
-    model, onehot_encoder_geo, label_encoder_gender, scaler = load_artifacts()
+    model, geo_encoder, gender_encoder, scaler = load_artifacts()
 except Exception as e:
-    st.error(f"Could not load model or pickle files: {e}")
+    st.error(f"Could not load model or encoders: {e}")
+    st.info(
+        "Check that model.h5, onehot_encoder_geo.pkl, "
+        "label_encoder_gender.pkl, and scaler.pkl exist "
+        "in your project and use compatible library versions."
+    )
     st.stop()
 
+# -----------------------------------
+# 3. Customer input form
+# -----------------------------------
+with st.form("customer_form"):
+
+    st.subheader("Customer Information")
+
+    credit_score = st.number_input(
+        "Credit Score",
+        min_value=300,
+        max_value=900,
+        value=600
+    )
+
+    geography_options = list(geo_encoder.categories_[0])
+    geography = st.selectbox(
+        "Geography",
+        geography_options
+    )
+
+    gender_options = list(gender_encoder.classes_)
+    gender = st.selectbox(
+        "Gender",
+        gender_options
+    )
+
+    age = st.number_input(
+        "Age",
+        min_value=18,
+        max_value=100,
+        value=40
+    )
+
+    tenure = st.number_input(
+        "Tenure (years)",
+        min_value=0,
+        max_value=10,
+        value=3
+    )
+
+    balance = st.number_input(
+        "Account Balance",
+        min_value=0.0,
+        value=60000.0
+    )
+
+    num_products = st.selectbox(
+        "Number of Products",
+        [1, 2, 3, 4]
+    )
+
+    has_credit_card = st.selectbox(
+        "Has Credit Card?",
+        ["Yes", "No"]
+    )
+
+    is_active = st.selectbox(
+        "Is Active Member?",
+        ["Yes", "No"]
+    )
+
+    salary = st.number_input(
+        "Estimated Salary",
+        min_value=0.0,
+        value=50000.0
+    )
+
+    submitted = st.form_submit_button("Predict Churn")
 
 # -----------------------------------
-# 2. Streamlit interface
+# 4. Process input and predict
 # -----------------------------------
-
-st.title("Customer Churn Prediction")
-st.write(
-    "Enter customer details to predict whether the customer may leave the bank."
-)
-
-# Use the categories stored in the trained Geography encoder
-geography_options = list(onehot_encoder_geo.categories_[0])
-
-# Use a standard dropdown if the saved gender encoder is fitted.
-# Otherwise, use the common training categories.
-if hasattr(label_encoder_gender, "classes_"):
-    gender_options = list(label_encoder_gender.classes_)
-else:
-    gender_options = ["Female", "Male"]
-
-credit_score = st.number_input(
-    "Credit Score", min_value=300, max_value=900, value=600
-)
-
-geography = st.selectbox("Geography", geography_options)
-
-gender = st.selectbox("Gender", gender_options)
-
-age = st.number_input(
-    "Age", min_value=18, max_value=100, value=40
-)
-
-tenure = st.number_input(
-    "Tenure (years)", min_value=0, max_value=10, value=3
-)
-
-balance = st.number_input(
-    "Account Balance", min_value=0.0, value=60000.0
-)
-
-num_of_products = st.selectbox(
-    "Number of Products", [1, 2, 3, 4]
-)
-
-has_cr_card = st.selectbox("Has Credit Card?", ["Yes", "No"])
-
-is_active_member = st.selectbox(
-    "Is Active Member?", ["Yes", "No"]
-)
-
-estimated_salary = st.number_input(
-    "Estimated Salary", min_value=0.0, value=50000.0
-)
-
-
-# -----------------------------------
-# 3. Predict churn
-# -----------------------------------
-
-if st.button("Predict Churn"):
-
+if submitted:
     try:
-        # Encode Gender
-        if hasattr(label_encoder_gender, "classes_"):
-            gender_encoded = label_encoder_gender.transform([gender])[0]
-        else:
-            st.error(
-                "Your gender encoder pickle is not fitted. "
-                "Fix label_encoder_gender.pkl using your original "
-                "training notebook before predicting."
-            )
-            st.stop()
+        # Encode gender using the fitted encoder
+        gender_encoded = gender_encoder.transform([gender])[0]
 
-        # Encode Geography using the fitted OneHotEncoder
-        geo_encoded = onehot_encoder_geo.transform(
+        # Encode geography
+        geo_result = geo_encoder.transform(
             pd.DataFrame({"Geography": [geography]})
-        ).toarray()
+        )
 
-        geo_columns = onehot_encoder_geo.get_feature_names_out(
+        # Handle sparse or dense encoder output
+        if hasattr(geo_result, "toarray"):
+            geo_result = geo_result.toarray()
+
+        geo_columns = geo_encoder.get_feature_names_out(
             ["Geography"]
         )
 
-        # Prepare customer features
+        # Create customer features
         customer_data = pd.DataFrame([{
             "CreditScore": credit_score,
             "Gender": gender_encoded,
             "Age": age,
             "Tenure": tenure,
             "Balance": balance,
-            "NumOfProducts": num_of_products,
-            "HasCrCard": 1 if has_cr_card == "Yes" else 0,
-            "IsActiveMember": 1 if is_active_member == "Yes" else 0,
-            "EstimatedSalary": estimated_salary
+            "NumOfProducts": num_products,
+            "HasCrCard": 1 if has_credit_card == "Yes" else 0,
+            "IsActiveMember": 1 if is_active == "Yes" else 0,
+            "EstimatedSalary": salary
         }])
 
-        # Add Geography encoding
         geography_data = pd.DataFrame(
-            geo_encoded, columns=geo_columns
+            geo_result,
+            columns=geo_columns
         )
 
         final_input = pd.concat(
-            [customer_data, geography_data], axis=1
+            [customer_data, geography_data],
+            axis=1
         )
 
-        # Match the exact feature order used during model training.
-        # This list assumes the common 12-feature churn model.
+        # Match the exact training feature order
         expected_columns = [
-            "CreditScore", "Gender", "Age", "Tenure", "Balance",
-            "NumOfProducts", "HasCrCard", "IsActiveMember",
-            "EstimatedSalary", "Geography_France",
-            "Geography_Germany", "Geography_Spain"
+            "CreditScore",
+            "Gender",
+            "Age",
+            "Tenure",
+            "Balance",
+            "NumOfProducts",
+            "HasCrCard",
+            "IsActiveMember",
+            "EstimatedSalary",
+            "Geography_France",
+            "Geography_Germany",
+            "Geography_Spain"
         ]
 
-        if set(final_input.columns) != set(expected_columns):
+        missing_columns = [
+            col for col in expected_columns
+            if col not in final_input.columns
+        ]
+
+        if missing_columns:
             st.error(
-                "Input columns do not match the expected model features. "
-                "Check your original training notebook and encoder categories."
+                f"Missing encoded features: {missing_columns}"
             )
             st.stop()
 
         final_input = final_input[expected_columns]
 
-        # Scale features
+        # Scale features using the original fitted scaler
         scaled_input = scaler.transform(final_input)
 
-        # Predict
-        prediction = model.predict(scaled_input, verbose=0)
-        probability = float(np.asarray(prediction).reshape(-1)[0])
+        # Predict probability
+        prediction = model.predict(
+            scaled_input,
+            verbose=0
+        )
+
+        probability = float(
+            np.asarray(prediction).reshape(-1)[0]
+        )
 
         st.subheader("Prediction Result")
-        st.metric("Customer Churn Probability", f"{probability:.2%}")
+
+        st.metric(
+            "Customer Churn Probability",
+            f"{probability:.2%}"
+        )
 
         if probability >= 0.5:
-            st.error("The customer is likely to leave the bank.")
+            st.error(
+                "⚠️ The model predicts that the customer "
+                "is likely to leave the bank."
+            )
         else:
-            st.success("The customer is likely to stay with the bank.")
+            st.success(
+                "✅ The model predicts that the customer "
+                "is likely to stay with the bank."
+            )
+
+        st.caption(
+            "This is a model prediction, not a guarantee "
+            "of the customer's future behavior."
+        )
 
     except Exception as e:
         st.error(f"Prediction failed: {e}")
